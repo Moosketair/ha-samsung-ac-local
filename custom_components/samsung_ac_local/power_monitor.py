@@ -184,9 +184,13 @@ class AdaptivePowerModel:
 
         # Thresholds adapt to standby/fan power and observed variation; they
         # cannot distinguish low-output inverter heating from indoor fan load.
-        margin = max(110.0, ref * 0.8, mad * 5.0)
+        # If no fan-only baseline exists, OFF consumption omits indoor
+        # fan power. Keep a generous minimum margin so a running indoor
+        # blower alone is less likely to be mistaken for a compressor.
+        has_fan_reference = len(self.fan) >= _MIN_REFERENCE_SAMPLES
+        margin = max(110.0 if has_fan_reference else 250.0, ref * 0.8, mad * 5.0)
         if not trusted_reference:
-            margin = max(200.0, margin)
+            margin = max(300.0, margin)
         activation = ref + margin
         idle_ceiling = ref + max(35.0, ref * 0.30, mad * 3.0)
         self.activation_threshold_w = round(activation, 1)
