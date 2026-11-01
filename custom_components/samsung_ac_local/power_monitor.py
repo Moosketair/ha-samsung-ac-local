@@ -294,8 +294,11 @@ class SamsungACPowerMonitor:
             and math.isfinite(watts)
             and 0 <= watts <= 25000
             and state is not None
+            # Our mirrored power entity carries this attribute; never let
+            # it recursively feed this observer if selected by mistake.
+            and "source_entity_id" not in state.attributes
             and reported_at is not None
-            and (now - reported_at) <= _SENSOR_MAX_AGE
+            and 0 <= (now - reported_at) <= _SENSOR_MAX_AGE
         )
         if not valid:
             if self._data_valid:
