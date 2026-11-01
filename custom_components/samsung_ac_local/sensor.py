@@ -194,6 +194,14 @@ class SamsungACSensor(CoordinatorEntity[SamsungACCoordinator], SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Show only the external-temperature fields relevant to diagnosis."""
+        if self.entity_description.key == "instantaneous_power_w":
+            status: ACStatus | None = self.coordinator.data
+            return {
+                "source": status.instantaneous_power_source
+                if status is not None
+                else None
+            }
+
         if self.entity_description.key != "remote_temperature_probe":
             return {}
         status: ACStatus | None = self.coordinator.data
