@@ -119,3 +119,27 @@ async def test_coordinator_name(
 ) -> None:
     """Coordinator name includes the client host."""
     assert mock_client.host in coordinator.name
+
+
+async def test_failed_mode_poll_retains_known_modes(
+    hass: HomeAssistant,
+    coordinator: SamsungACCoordinator,
+    mock_client: MagicMock,
+    mock_status: ACStatus,
+) -> None:
+    """A temporary mode read failure must not remove HVAC controls."""
+    from custom_components.samsung_ac_local.const import HvacMode
+
+    known_modes = [HvacMode.HEAT, HvacMode.COOL]
+    coordinator.async_set_updated_data(
+        ACStatus(supported_modes=known_modes, current_temperature=21.0)
+    )
+    partial = ACStatus(supported_modes=[], current_temperature=None)
+    with patch.object(
+        hass, "async_add_executor_job", AsyncMock(return_value=partial)
+    ):
+        result = await coordinator._async_update_data()
+
+    assert result.supported_modes == known_modes
+    # An actual missing temperature is not fabricated by the coordinator.
+    assert result.current_temperature is None
