@@ -25,6 +25,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SamsungACCoordinator
+from .power_sensor import SamsungACEstimatedActivitySensor, SamsungACExternalPowerSensor
 
 if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -137,10 +138,18 @@ async def async_setup_entry(
     """Set up Samsung AC sensor entities."""
     data: SamsungACData = entry.runtime_data
     device_id = data.device_info.mac_wifi or data.client.host
-    async_add_entities(
+    entities = [
         SamsungACSensor(data.coordinator, description, device_id)
         for description in SENSORS
-    )
+    ]
+    if data.power_monitor is not None:
+        entities.extend(
+            [
+                SamsungACExternalPowerSensor(data.power_monitor, device_id),
+                SamsungACEstimatedActivitySensor(data.power_monitor, device_id),
+            ]
+        )
+    async_add_entities(entities)
 
 
 class SamsungACSensor(CoordinatorEntity[SamsungACCoordinator], SensorEntity):

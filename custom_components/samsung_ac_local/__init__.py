@@ -12,10 +12,16 @@ from homeassistant.exceptions import ConfigEntryNotReady
 
 from .api import SamsungACClient, SamsungACConnectionError
 from .cert import CERT_PEM, KEY_PEM
-from .config_flow import CONF_HOST, CONF_POLL_INTERVAL
+from .config_flow import (
+    CONF_HOST,
+    CONF_POLL_INTERVAL,
+    CONF_POWER_SENSOR,
+    CONF_PUBLISH_HVAC_ACTION,
+)
 from .const import LOGGER
 from .coordinator import DEFAULT_POLL_INTERVAL, SamsungACCoordinator
 from .data import SamsungACConfigEntry, SamsungACData
+from .power_monitor import SamsungACPowerMonitor
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -51,10 +57,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: SamsungACConfigEntry) ->
     coordinator = SamsungACCoordinator(hass, client, poll_interval)
     await coordinator.async_config_entry_first_refresh()
 
+    power_monitor = None
+    if power_sensor := entry.options.get(CONF_POWER_SENSOR):
+        try:
+            power_monitor = SamsungACPowerMonitor(
+                hass, coordinator, power_sensor, entry.entry_id
+            )
+            await power_monitor.async_start()
+        except Exception:  # Optional diagnostics must never break AC control.
+            LOGGER.exception("Unable to start optional external power monitor")
+            power_monitor = None
+
     entry.runtime_data = SamsungACData(
         client=client,
         coordinator=coordinator,
         device_info=device_info,
+        power_monitor=power_monitor,
+        publish_power_hvac_action=bool(entry.options.get(CONF_PUBLISH_HVAC_ACTION, False)),
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -67,7 +86,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: SamsungACConfigEntry) -
     """Unload a config entry and disconnect from the AC."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        await hass.async_add_executor_job(entry.runtime_data.client.disconnect)
+        try:
+            if entry.runtime_data.power_monitor is not None:
+                await entry.runtime_data.power_monitor.async_stop()
+        except Exception:
+            LOGGER.exception("Unable to persist optional external power monitor")
+        finally:
+            await hass.async_add_executor_job(entry.runtime_data.client.disconnect)
 
     return unloaded
 

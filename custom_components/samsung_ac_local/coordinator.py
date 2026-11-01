@@ -76,7 +76,14 @@ class SamsungACCoordinator(DataUpdateCoordinator[ACStatus]):
     async def _async_update_data(self) -> ACStatus:
         """Fetch AC status via the blocking DTLS client."""
         try:
-            return await self.hass.async_add_executor_job(self.client.get_status)
+            status = await self.hass.async_add_executor_job(self.client.get_status)
+            # Supported modes are device capabilities, not a live state reading.
+            # A transient failed mode GET must not remove 'heat'/'cool' from
+            # the Home Assistant entity and block subsequent HVAC commands.
+            previous = self.data
+            if previous is not None and not status.supported_modes:
+                status = replace(status, supported_modes=previous.supported_modes)
+            return status
         except (SamsungACConnectionError, SamsungACRequestError) as err:
             msg = f"Error communicating with AC: {err}"
             raise UpdateFailed(msg) from err

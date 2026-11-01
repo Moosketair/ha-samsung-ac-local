@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
     ClimateEntityFeature,
+    HVACAction,
     HVACMode,
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
@@ -117,6 +118,8 @@ class SamsungACClimateEntity(CoordinatorEntity[SamsungACCoordinator], ClimateEnt
         """
         super().__init__(coordinator)
         self._client = data.client
+        self._power_monitor = data.power_monitor
+        self._publish_power_hvac_action = data.publish_power_hvac_action
         device_id = data.device_info.mac_wifi or data.client.host
         self._attr_unique_id = f"{device_id}_climate"
         self._attr_device_info = {
@@ -127,6 +130,44 @@ class SamsungACClimateEntity(CoordinatorEntity[SamsungACCoordinator], ClimateEnt
             "sw_version": data.device_info.firmware_version,
         }
         self._update_from_status(coordinator.data)
+
+    async def async_added_to_hass(self) -> None:
+        """Listen for consumption updates independent of the CoAP poll."""
+        await super().async_added_to_hass()
+        if self._power_monitor is not None and self._publish_power_hvac_action:
+            self.async_on_remove(self._power_monitor.add_listener(self._power_changed))
+
+    @callback
+    def _power_changed(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def hvac_action(self) -> HVACAction | None:
+        """Optionally expose a high-confidence estimate, never a guess as fact.
+
+        If there is no reliable evidence, return None so Versatile Thermostat
+        falls back to its own built-in inference. No actuator controls depend
+        on this estimated value in Samsung AC Local.
+        """
+        if not self._publish_power_hvac_action or self._power_monitor is None:
+            return None
+        if self._attr_hvac_mode == HVACMode.OFF:
+            return HVACAction.OFF
+        monitor = self._power_monitor
+        if not monitor.available or monitor.model.confidence != "high":
+            return None
+        if (
+            monitor.model.state == "heating_probable"
+            and self._attr_hvac_mode == HVACMode.HEAT
+        ):
+            return HVACAction.HEATING
+        if (
+            monitor.model.state == "cooling_probable"
+            and self._attr_hvac_mode == HVACMode.COOL
+        ):
+            return HVACAction.COOLING
+        # Low consumption is insufficient to prove compressor inactivity.
+        return None
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
@@ -182,9 +223,14 @@ class SamsungACClimateEntity(CoordinatorEntity[SamsungACCoordinator], ClimateEnt
             self._attr_hvac_mode = _HVAC_MODE_MAP.get(status.hvac_mode)
 
         # Temperature
-        self._attr_current_temperature = status.current_temperature
-        self._attr_target_temperature = status.target_temperature
-        self._attr_current_humidity = status.humidity
+        # Keep the last confirmed measurements through an intermittent
+        # CoAP read failure. A None means "not received", not "cleared".
+        if status.current_temperature is not None:
+            self._attr_current_temperature = status.current_temperature
+        if status.target_temperature is not None:
+            self._attr_target_temperature = status.target_temperature
+        if status.humidity is not None:
+            self._attr_current_humidity = status.humidity
 
         if status.temperature_min is not None:
             self._attr_min_temp = status.temperature_min

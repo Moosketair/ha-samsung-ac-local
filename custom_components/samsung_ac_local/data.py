@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
     from .api import DeviceInfo, SamsungACClient
     from .coordinator import SamsungACCoordinator
+    from .power_monitor import SamsungACPowerMonitor
 
 type SamsungACConfigEntry = ConfigEntry[SamsungACData]
 
@@ -29,3 +30,5 @@ class SamsungACData:
     client: SamsungACClient
     coordinator: SamsungACCoordinator
     device_info: DeviceInfo
+    power_monitor: SamsungACPowerMonitor | None = None
+    publish_power_hvac_action: bool = False

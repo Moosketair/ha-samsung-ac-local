@@ -179,6 +179,9 @@ class SamsungACClient:
         self._sock: socket.socket | None = None
         self._mid: int = 0
         self._lock = threading.Lock()
+        # Some Samsung firmwares reject the standard OCF desired-temperature
+        # endpoint (4.04) but accept the vendor temperatures collection.
+        self._temperature_write_resource = Resource.TEMPERATURE_DESIRED
 
     @property
     def host(self) -> str:
@@ -322,7 +325,35 @@ class SamsungACClient:
             True if the AC accepted the command.
 
         """
-        return self._post(Resource.TEMPERATURE_DESIRED, {"temperature": temp})
+        vendor_payload = {
+            f"{SAMSUNG_PREFIX}items": [
+                {
+                    f"{SAMSUNG_PREFIX}id": "0",
+                    f"{SAMSUNG_PREFIX}desired": f"{temp:g}",
+                }
+            ]
+        }
+
+        if self._temperature_write_resource == Resource.TEMPERATURES:
+            return self._post(Resource.TEMPERATURES, vendor_payload)
+
+        success, code = self._post_with_code(
+            Resource.TEMPERATURE_DESIRED, {"temperature": temp}
+        )
+        if success or code != "4.04":
+            return success
+
+        # A 4.04 means the OCF resource is not available on this firmware.
+        # Do not retry other failures: an ambiguous POST may have succeeded.
+        LOGGER.info(
+            "Desired-temperature resource unavailable (4.04); "
+            "trying Samsung vendor temperatures resource"
+        )
+        success = self._post(Resource.TEMPERATURES, vendor_payload)
+        if success:
+            self._temperature_write_resource = Resource.TEMPERATURES
+            LOGGER.info("Using Samsung vendor temperature control for %s", self._host)
+        return success
 
     def set_fan_mode(self, mode: FanMode) -> bool:
         """
@@ -684,61 +715,79 @@ class SamsungACClient:
         path: str,
         payload: dict | None = None,
     ) -> tuple[str | None, dict | None]:
-        """
-        Send a CoAP request and wait for the response.
+        """Send a CoAP request, recovering from an unresponsive DTLS session.
 
-        Reconnects once on failure before raising.
+        A GET may be retried once on a fresh DTLS connection. Never
+        automatically repeat a POST: a lost reply does not prove the command
+        failed, and repeating a command can change the device state twice.
         """
-        for attempt in range(2):
+        attempts = 2 if method == COAP_GET else 1
+        for attempt in range(attempts):
             try:
                 self._ensure_connected()
                 msg = self._build_message(method, path, payload)
                 self._active_conn.send(msg)
                 return self._receive_response()
-            except SamsungACRequestError:
-                raise
-            except SamsungACConnectionError:
-                raise
-            except Exception as err:
-                if attempt == 0:
-                    LOGGER.debug("Request to %s failed, reconnecting: %s", path, err)
-                    self._disconnect_locked()
-                    continue
+            except (SamsungACRequestError, SamsungACConnectionError) as err:
+                LOGGER.debug("CoAP request to %s failed: %s", path, err)
+                self._disconnect_locked()
+                if attempt + 1 >= attempts:
+                    raise
+            except (SSL.Error, OSError, TimeoutError) as err:
+                LOGGER.debug("CoAP transport error on %s: %s", path, err)
+                self._disconnect_locked()
+                if attempt + 1 >= attempts:
+                    msg = f"CoAP request to {path} failed: {err}"
+                    raise SamsungACRequestError(msg) from err
 
-                msg_str = f"Request to {path} failed after reconnect: {err}"
-                raise SamsungACRequestError(msg_str) from err
+            LOGGER.debug("Retrying GET %s on a fresh DTLS session", path)
 
-        # Unreachable but satisfies type checkers
-        return None, None
+        msg = f"CoAP request to {path} exhausted retries"
+        raise SamsungACRequestError(msg)
 
     def _receive_response(self) -> tuple[str, dict | None]:
-        """Wait for a CoAP response within the retry/timeout budget."""
-        expected_token = self._mid & 0xFF
-        # CoAP header is 4 bytes + 1 byte token (TKL=1)
-        token_offset = 4
-        min_response_len = token_offset + 1
+        """Wait for the matching CoAP token, ignoring late unrelated replies.
 
-        for _ in range(self._max_retries):
-            ready, _, _ = select.select([self._active_sock], [], [], self._recv_timeout)
+        One monotonic deadline bounds the *total* wait time. Receiving stale
+        packets no longer exhausts the response budget after two packets.
+        """
+        expected_token = self._mid & 0xFF
+        deadline = time.monotonic() + self._recv_timeout
+        discarded = 0
+
+        # Also cap malformed/stale packets so a noisy device cannot
+        # keep this worker spinning at full CPU until the deadline.
+        while discarded < 64 and (remaining := deadline - time.monotonic()) > 0:
+            ready, _, _ = select.select([self._active_sock], [], [], remaining)
             if not ready:
+                break
+
+            try:
+                data = self._active_conn.recv(4096)
+            except SSL.WantReadError:
                 continue
 
-            data = self._active_conn.recv(4096)
+            # CoAP v1 responses must contain the one-byte request token.
+            if len(data) < 5 or (data[0] >> 6) != 1 or (data[0] & 0x0F) != 1:
+                discarded += 1
+                LOGGER.debug("Discarding short or invalid CoAP response")
+                continue
 
-            # Validate token matches our request
-            if len(data) < min_response_len or data[token_offset] != expected_token:
+            if data[4] != expected_token:
+                discarded += 1
                 LOGGER.debug(
-                    "Discarding mismatched response (expected token %02x, got %s)",
+                    "Discarding mismatched response (expected token %02x, got %02x)",
                     expected_token,
-                    data[token_offset : token_offset + 1].hex()
-                    if len(data) > token_offset
-                    else "short",
+                    data[4],
                 )
                 continue
 
             return self._parse_response(data)
 
-        msg = f"No response after {self._max_retries} attempts"
+        msg = (
+            f"No response after {self._recv_timeout:.1f}s "
+            f"(discarded {discarded} stale/unrelated CoAP packets)"
+        )
         raise SamsungACRequestError(msg)
 
     # --- Convenience wrappers (private) ---
@@ -765,24 +814,35 @@ class SamsungACClient:
 
     def _post(self, resource: Resource, payload: dict) -> bool:
         """POST to a resource, returning True if the AC accepted the command."""
+        success, _code = self._post_with_code(resource, payload)
+        return success
+
+    def _post_with_code(
+        self, resource: Resource, payload: dict
+    ) -> tuple[bool, str | None]:
+        """POST once and return success and response code for safe fallbacks.
+
+        A missing response is never treated as permission to retry a POST.
+        """
         with self._lock:
             try:
                 code, data = self._request_locked(COAP_POST, resource.value, payload)
             except (SamsungACConnectionError, SamsungACRequestError) as err:
                 LOGGER.error("POST %s failed: %s", resource.value, err)
-                return False
+                return False, None
 
         if code != "2.04":
             LOGGER.warning("POST %s returned code %s", resource.value, code)
-            return False
+            return False, code
 
         response = data.get("controlResponse") if isinstance(data, dict) else None
         if not response:
             LOGGER.warning("POST %s: no controlResponse in reply", resource.value)
-            return False
+            return False, code
 
         return (
-            response.get("result") is True or response.get("errorCode") == "unchanged"
+            response.get("result") is True or response.get("errorCode") == "unchanged",
+            code,
         )
 
     # --- Status polling helpers (private) ---
@@ -823,6 +883,10 @@ class SamsungACClient:
             items = _samsung_val(data, "items")
             if isinstance(items, list) and items:
                 item = items[0]
+                # Some firmwares do not expose /temperature/current/0.
+                # The vendor collection contains the same current reading.
+                if status.current_temperature is None:
+                    status.current_temperature = _to_float(_samsung_val(item, "current"))
                 status.target_temperature = _to_float(_samsung_val(item, "desired"))
 
                 if status.temperature_min is None:
