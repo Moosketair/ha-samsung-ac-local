@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.samsung_ac_local.api import SamsungACClient
+from custom_components.samsung_ac_local.api import ACStatus, SamsungACClient
 from custom_components.samsung_ac_local.const import Resource
 
 
@@ -75,3 +75,48 @@ def test_failed_vendor_fallback_is_not_cached(client: SamsungACClient) -> None:
     ):
         assert not client.set_target_temperature(19.0)
     assert client._temperature_write_resource == Resource.TEMPERATURE_DESIRED
+
+
+def test_vendor_temperature_read_recovers_missing_ocf_current(
+    client: SamsungACClient,
+) -> None:
+    """The collection provides current and desired if OCF current is missing."""
+    vendor = {
+        "x.com.samsung.da.items": [
+            {
+                "x.com.samsung.da.id": "0",
+                "x.com.samsung.da.current": "19.5",
+                "x.com.samsung.da.desired": "21.0",
+                "x.com.samsung.da.minimum": "16",
+                "x.com.samsung.da.maximum": "30",
+                "x.com.samsung.da.increment": "1",
+            }
+        ]
+    }
+    status = ACStatus()
+    with patch.object(client, "_get", side_effect=[None, vendor]) as get:
+        client._poll_temperatures(status)
+    assert get.call_count == 2
+    assert status.current_temperature == 19.5
+    assert status.target_temperature == 21.0
+    assert status.temperature_step == 1.0
+
+
+def test_vendor_temperature_read_does_not_override_ocf_current(
+    client: SamsungACClient,
+) -> None:
+    """Prefer OCF current when it is available and keep vendor desired."""
+    ocf = {"temperature": 20.0}
+    vendor = {
+        "x.com.samsung.da.items": [
+            {
+                "x.com.samsung.da.current": "19.0",
+                "x.com.samsung.da.desired": "22.0",
+            }
+        ]
+    }
+    status = ACStatus()
+    with patch.object(client, "_get", side_effect=[ocf, vendor]):
+        client._poll_temperatures(status)
+    assert status.current_temperature == 20.0
+    assert status.target_temperature == 22.0
