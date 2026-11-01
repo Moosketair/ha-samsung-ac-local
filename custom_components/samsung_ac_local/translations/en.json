@@ -34,6 +34,9 @@
       "energy": {
         "name": "Energy consumption"
       },
+      "instantaneous_power": {
+        "name": "Instantaneous power"
+      },
       "filter_usage": {
         "name": "Filter usage"
       },
