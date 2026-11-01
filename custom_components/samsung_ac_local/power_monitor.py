@@ -49,6 +49,7 @@ class AdaptivePowerModel:
         self.mode: str | None = None
         self.mode_since: float = 0.0
         self.last_sample: float = 0.0
+        self._last_reported: float = 0.0
         self.last_power_w: float | None = None
         self.state = "learning"
         self.confidence = "none"
@@ -110,7 +111,10 @@ class AdaptivePowerModel:
             return None, 0
         return low, 0
 
-    def observe(self, power_w: float, mode: str | None, timestamp: float) -> bool:
+    def observe(
+        self, power_w: float, mode: str | None, timestamp: float,
+        reported_at: float | None = None,
+    ) -> bool:
         """Observe one timed reading. Return True if the public state changed."""
         if not math.isfinite(power_w) or power_w < 0 or power_w > 25000:
             return False
@@ -125,7 +129,22 @@ class AdaptivePowerModel:
             self.mode_since = timestamp
             self._candidate = None
             self._votes = 0
-            self.state, self.confidence = ("off", "high") if mode == "off" else ("learning", "none")
+            if mode == "off":
+                self.state, self.confidence = "off", "high"
+            elif mode == "fan":
+                self.state, self.confidence = "fan", "medium"
+            else:
+                self.state, self.confidence = "learning", "none"
+
+        # The coordinator may poll faster than the meter reports. Never
+        # learn multiple samples from one cached source-state value.
+        if reported_at is not None:
+            if reported_at <= self._last_reported:
+                return original != (self.state, self.confidence, self.reference_w, self.activation_threshold_w)
+            self._last_reported = reported_at
+            # Data recorded before a mode switch cannot train the new mode.
+            if reported_at < self.mode_since:
+                return original != (self.state, self.confidence, self.reference_w, self.activation_threshold_w)
 
         if timestamp < self.last_sample + _MIN_SAMPLE_SPACING:
             return original != (self.state, self.confidence, self.reference_w, self.activation_threshold_w)
@@ -217,6 +236,7 @@ class SamsungACPowerMonitor:
         self._unsub_sensor: Callable[[], None] | None = None
         self._unsub_coordinator: Callable[[], None] | None = None
         self._data_valid = False
+        self._last_reported_at: float | None = None
         self._next_save = 0.0
 
     async def async_start(self) -> None:
@@ -262,13 +282,16 @@ class SamsungACPowerMonitor:
             watts = None
         if unit == "kW" and watts is not None:
             watts *= 1000
+        reported = getattr(state, "last_reported", state.last_updated) if state else None
+        reported_at = reported.timestamp() if reported else None
         valid = (
             watts is not None
             and unit in ("W", "kW")
             and math.isfinite(watts)
             and 0 <= watts <= 25000
             and state is not None
-            and (now - state.last_updated.timestamp()) <= _SENSOR_MAX_AGE
+            and reported_at is not None
+            and (now - reported_at) <= _SENSOR_MAX_AGE
         )
         if not valid:
             if self._data_valid:
@@ -279,8 +302,11 @@ class SamsungACPowerMonitor:
         # No sample can originate from our own sensor: configured source is
         # a separate Home Assistant sensor selected in options.
         self._data_valid = True
+        self._last_reported_at = reported_at
         before = self.model.sample_counts
-        changed = self.model.observe(watts, self._mode(self.coordinator.data), now)
+        changed = self.model.observe(
+            watts, self._mode(self.coordinator.data), now, reported_at=reported_at
+        )
         if changed:
             self._notify()
         if before != self.model.sample_counts and now >= self._next_save:
@@ -312,7 +338,10 @@ class SamsungACPowerMonitor:
     def available(self) -> bool:
         if not self._data_valid or self.model.last_power_w is None:
             return False
-        if dt_util.utcnow().timestamp() - self.model.last_sample > _SENSOR_MAX_AGE:
+        if (
+            self._last_reported_at is None
+            or dt_util.utcnow().timestamp() - self._last_reported_at > _SENSOR_MAX_AGE
+        ):
             return False
         return True
 
