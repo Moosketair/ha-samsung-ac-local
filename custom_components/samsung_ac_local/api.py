@@ -9,6 +9,7 @@ since the underlying UDP/DTLS I/O is synchronous.
 """
 
 import contextlib
+import math
 import select
 import socket
 import struct
@@ -86,6 +87,7 @@ class ACStatus:
     filter_status: str | None = None
     energy_wh: int | None = None
     instantaneous_power_w: float | None = None
+    instantaneous_power_source: str | None = None
     # Read-only diagnostic for a possible external temperature feed. Does
     # not inject a reading or alter the AC's internal thermostat.
     remote_temperature_probe: str | None = None
@@ -1002,19 +1004,43 @@ class SamsungACClient:
             status.filter_status = _samsung_val(data, "filterStatus")
 
     def _poll_energy(self, status: ACStatus) -> None:
+        """Read energy and try both documented OCF power views.
+
+        The vendor endpoint is preferred. A missing/invalid instantaneous
+        reading triggers one read-only GET of the standard OCF endpoint.
+        Neither source establishes whether the compressor is actually on.
+        """
         data = self._get(Resource.ENERGY)
         if data:
             status.energy_wh = _to_int(_samsung_val(data, "cumulativePower"))
 
-            # Some Samsung OCF firmwares expose instantaneous electric power
-            # on the same resource. Leave it unknown when absent or invalid:
-            # a synthetic 0 W would incorrectly imply an idle compressor.
             raw_power = _to_float(_samsung_val(data, "instantaneousPower"))
             power_unit = _samsung_val(data, "instantaneousPowerUnit")
-            if raw_power is not None and raw_power >= 0:
+            if (
+                raw_power is not None
+                and math.isfinite(raw_power)
+                and raw_power >= 0
+                and raw_power != 65278  # 0xFEFE: no-reading sentinel
+                and raw_power != 65535
+            ):
                 if isinstance(power_unit, str) and power_unit.upper() == "KW":
                     raw_power *= 1000
                 status.instantaneous_power_w = raw_power
+                status.instantaneous_power_source = "samsung_vendor"
+
+        if status.instantaneous_power_w is None:
+            standard_data = self._get(Resource.ENERGY_STANDARD)
+            if standard_data:
+                # OCF's 'power' field is in watts on known Samsung RAC dumps.
+                standard_power = _to_float(standard_data.get("power"))
+                if (
+                    standard_power is not None
+                    and math.isfinite(standard_power)
+                    and standard_power >= 0
+                    and standard_power not in (65278, 65535)
+                ):
+                    status.instantaneous_power_w = standard_power
+                    status.instantaneous_power_source = "ocf_standard"
 
     def _poll_remote_temperature(self, status: ACStatus) -> None:
         """Probe Samsung's external-temperature resource without writing to it.
