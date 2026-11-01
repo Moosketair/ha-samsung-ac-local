@@ -59,6 +59,7 @@ class Resource(StrEnum):
     MUTE_ONCE = "option/muteonce/vs/0"
     FILTER = "filter/airdustfilter/vs/0"
     ENERGY = "energy/consumption/vs/0"
+    ENERGY_STANDARD = "energy/consumption/0"
     ALARMS = "alarms/vs/0"
     DEVICE = "device/0"
     CONFIGURATION = "configuration/vs/0"
