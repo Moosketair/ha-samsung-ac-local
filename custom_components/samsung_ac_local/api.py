@@ -755,7 +755,9 @@ class SamsungACClient:
         deadline = time.monotonic() + self._recv_timeout
         discarded = 0
 
-        while (remaining := deadline - time.monotonic()) > 0:
+        # Also cap malformed/stale packets so a noisy device cannot
+        # keep this worker spinning at full CPU until the deadline.
+        while discarded < 64 and (remaining := deadline - time.monotonic()) > 0:
             ready, _, _ = select.select([self._active_sock], [], [], remaining)
             if not ready:
                 break
