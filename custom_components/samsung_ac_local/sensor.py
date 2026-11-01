@@ -203,4 +203,9 @@ class SamsungACSensor(CoordinatorEntity[SamsungACCoordinator], SensorEntity):
             "remote_temperature_value": status.remote_temperature_value,
             "remote_temperature_unit": status.remote_temperature_unit,
             "remote_temperature_error": status.remote_temperature_error,
+            "remote_temperature_metadata_status": (
+                status.remote_temperature_metadata_status
+            ),
+            "remote_temperature_interfaces": status.remote_temperature_interfaces,
+            "remote_temperature_types": status.remote_temperature_types,
         }
