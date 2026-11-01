@@ -25,6 +25,7 @@ from .coordinator import DEFAULT_POLL_INTERVAL
 CONF_HOST = "host"
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_POWER_SENSOR = "power_sensor"
+CONF_PUBLISH_HVAC_ACTION = "publish_power_hvac_action"
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
@@ -135,8 +136,14 @@ class SamsungACOptionsFlow(OptionsFlow):
             else vol.Optional(CONF_POWER_SENSOR)
         )
         fields[power_key] = selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="sensor")
+            selector.EntitySelectorConfig(domain="sensor", device_class="power")
         )
+        fields[
+            vol.Optional(
+                CONF_PUBLISH_HVAC_ACTION,
+                default=self._config_entry.options.get(CONF_PUBLISH_HVAC_ACTION, False),
+            )
+        ] = bool
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(fields),
