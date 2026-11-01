@@ -8,6 +8,7 @@ Handles initial setup (host only) and options flow
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.helpers import selector
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -23,6 +24,7 @@ from .coordinator import DEFAULT_POLL_INTERVAL
 
 CONF_HOST = "host"
 CONF_POLL_INTERVAL = "poll_interval"
+CONF_POWER_SENSOR = "power_sensor"
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
@@ -97,7 +99,7 @@ class SamsungACLocalConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class SamsungACOptionsFlow(OptionsFlow):
-    """Options flow for Samsung AC Local (poll interval)."""
+    """Options flow for poll interval and optional whole-AC power source."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """
@@ -121,13 +123,21 @@ class SamsungACOptionsFlow(OptionsFlow):
             CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
         )
 
+        current_sensor = self._config_entry.options.get(CONF_POWER_SENSOR)
+        fields = {
+            vol.Required(CONF_POLL_INTERVAL, default=current_interval): vol.All(
+                int, vol.Range(min=5, max=300)
+            ),
+        }
+        power_key = (
+            vol.Optional(CONF_POWER_SENSOR, default=current_sensor)
+            if current_sensor
+            else vol.Optional(CONF_POWER_SENSOR)
+        )
+        fields[power_key] = selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        )
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_POLL_INTERVAL, default=current_interval): vol.All(
-                        int, vol.Range(min=5, max=300)
-                    ),
-                }
-            ),
+            data_schema=vol.Schema(fields),
         )
