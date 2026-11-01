@@ -37,6 +37,9 @@
       "instantaneous_power": {
         "name": "Instantaneous power"
       },
+      "remote_temperature_probe": {
+        "name": "Remote temperature probe (read-only)"
+      },
       "filter_usage": {
         "name": "Filter usage"
       },
