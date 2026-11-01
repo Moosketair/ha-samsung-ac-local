@@ -59,7 +59,6 @@ class Resource(StrEnum):
     MUTE_ONCE = "option/muteonce/vs/0"
     FILTER = "filter/airdustfilter/vs/0"
     ENERGY = "energy/consumption/vs/0"
-    ENERGY_STANDARD = "energy/consumption/0"
     ALARMS = "alarms/vs/0"
     DEVICE = "device/0"
     CONFIGURATION = "configuration/vs/0"
@@ -71,7 +70,6 @@ class Resource(StrEnum):
     CONNECTION_CONFIG = "connectionconfig/vs/0"
     RM_WIFI = "rm/wifi/vs/0"
     REMOTE_DATA_CONTROL = "remotedatacontrol/vs/0"
-    REMOTE_TEMPERATURE = "remotetemperature/vs/0"
 
 
 class HvacMode(StrEnum):
