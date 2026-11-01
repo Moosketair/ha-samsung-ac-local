@@ -47,7 +47,7 @@ def test_invalid_coap_packet_is_skipped() -> None:
     client._mid = 7
     client._conn = MagicMock()
     client._sock = MagicMock()
-    client._conn.recv.side_effect = [b"\\x00\\x01", _response(7)]
+    client._conn.recv.side_effect = [bytes([0, 1]), _response(7)]
     with patch(
         "custom_components.samsung_ac_local.api.select.select",
         return_value=([client._sock], [], []),
