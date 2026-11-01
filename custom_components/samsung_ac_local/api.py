@@ -92,6 +92,9 @@ class ACStatus:
     remote_temperature_value: str | None = None
     remote_temperature_unit: str | None = None
     remote_temperature_error: str | None = None
+    remote_temperature_metadata_status: str | None = None
+    remote_temperature_interfaces: str | None = None
+    remote_temperature_types: str | None = None
     supported_modes: list[HvacMode] = field(default_factory=list)
     supported_swing: list[SwingMode] = field(default_factory=list)
     supported_convenient: list[ConvenientMode] = field(default_factory=list)
@@ -193,6 +196,9 @@ class SamsungACClient:
         # unsupported diagnostic resource every 30 seconds.
         self._remote_temperature_probe_cache: tuple[
             str, str | None, str | None, str | None
+        ] | None = None
+        self._remote_temperature_metadata_cache: tuple[
+            str, str | None, str | None
         ] | None = None
 
     @property
@@ -635,8 +641,15 @@ class SamsungACClient:
         method: int,
         path: str,
         payload: dict | None = None,
+        *,
+        query: str | None = None,
     ) -> bytes:
-        """Build a CoAP confirmable message with URI-Path options."""
+        """Build a CoAP message with optional standard URI-Query (option 15).
+
+        The query is used exclusively for read-only OCF baseline discovery.
+        """
+        if query is not None and payload is not None:
+            raise ValueError("Query discovery must not include a POST payload")
         self._mid = (self._mid + 1) & 0xFFFF
         token = bytes([self._mid & 0xFF])
         # Ver=1, Type=CON, TKL=1
@@ -653,6 +666,22 @@ class SamsungACClient:
                 msg += bytes([(delta << 4) | 13, seg_len - 13])
 
             msg += segment.encode()
+
+        if query is not None:
+            # CoAP URI-Query uses option 15, following URI-Path (option 11).
+            # Length 13+ requires the one-byte extended-length encoding.
+            encoded_query = query.encode()
+            query_len = len(encoded_query)
+            if query_len < COAP_OPTION_EXT_THRESHOLD:
+                msg += bytes([((15 - prev_option) << 4) | query_len])
+            elif query_len < 269:
+                msg += bytes(
+                    [((15 - prev_option) << 4) | 13, query_len - 13]
+                )
+            else:
+                raise ValueError("OCF discovery query too long")
+            msg += encoded_query
+            prev_option = 15
 
         if payload is not None:
             delta = 12 - prev_option
@@ -727,6 +756,8 @@ class SamsungACClient:
         method: int,
         path: str,
         payload: dict | None = None,
+        *,
+        query: str | None = None,
     ) -> tuple[str | None, dict | None]:
         """Send a CoAP request, recovering from an unresponsive DTLS session.
 
@@ -738,7 +769,7 @@ class SamsungACClient:
         for attempt in range(attempts):
             try:
                 self._ensure_connected()
-                msg = self._build_message(method, path, payload)
+                msg = self._build_message(method, path, payload, query=query)
                 self._active_conn.send(msg)
                 return self._receive_response()
             except (SamsungACRequestError, SamsungACConnectionError) as err:
@@ -1031,6 +1062,57 @@ class SamsungACClient:
             status.remote_temperature_unit,
             status.remote_temperature_error,
         ) = self._remote_temperature_probe_cache
+
+        if status.remote_temperature_probe not in (
+            "present_empty",
+            "present_with_value",
+        ):
+            return
+
+        # A separate, read-only OCF baseline GET may advertise resource
+        # interfaces (e.g. oic.if.r or oic.if.a). It does not prove writable
+        # semantics or enable third-party temperature injection.
+        if self._remote_temperature_metadata_cache is None:
+            try:
+                with self._lock:
+                    code, data = self._request_locked(
+                        COAP_GET,
+                        Resource.REMOTE_TEMPERATURE.value,
+                        query="if=oic.if.baseline",
+                    )
+            except (SamsungACConnectionError, SamsungACRequestError) as err:
+                LOGGER.debug("Remote temperature baseline GET failed: %s", err)
+                status.remote_temperature_metadata_status = "connection_error"
+                return
+
+            if code and code.startswith("2.") and isinstance(data, dict):
+                interfaces = data.get("if")
+                types = data.get("rt")
+                if not isinstance(interfaces, list):
+                    interfaces = None
+                if not isinstance(types, list):
+                    types = None
+                self._remote_temperature_metadata_cache = (
+                    "advertised" if interfaces or types else "no_metadata",
+                    ", ".join(str(x) for x in interfaces) if interfaces else None,
+                    ", ".join(str(x) for x in types) if types else None,
+                )
+            elif code == "4.04":
+                self._remote_temperature_metadata_cache = (
+                    "baseline_not_supported",
+                    None,
+                    None,
+                )
+            else:
+                LOGGER.debug("Remote temperature baseline returned code %s", code)
+                status.remote_temperature_metadata_status = "unexpected_response"
+                return
+
+        (
+            status.remote_temperature_metadata_status,
+            status.remote_temperature_interfaces,
+            status.remote_temperature_types,
+        ) = self._remote_temperature_metadata_cache
 
     def _poll_air_purify(self, status: ACStatus) -> None:
         data = self._get(Resource.AIR_PURIFY)
