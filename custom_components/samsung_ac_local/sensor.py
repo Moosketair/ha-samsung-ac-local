@@ -6,7 +6,7 @@ filter usage, WiFi signal strength, operation count, auto-clean progress,
 freeze wash progress, and more.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -54,6 +54,12 @@ SENSORS: tuple[SensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
+    ),
+    SensorEntityDescription(
+        key="remote_temperature_probe",
+        translation_key="remote_temperature_probe",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:thermometer-check",
     ),
     SensorEntityDescription(
         key="filter_usage_hours",
@@ -177,10 +183,24 @@ class SamsungACSensor(CoordinatorEntity[SamsungACCoordinator], SensorEntity):
         self._attr_device_info = {"identifiers": {(DOMAIN, device_id)}}
 
     @property
-    def native_value(self) -> float | int | None:
+    def native_value(self) -> float | int | str | None:
         """Return the sensor value from coordinator data."""
         status: ACStatus | None = self.coordinator.data
         if status is None:
             return None
 
         return getattr(status, self.entity_description.key, None)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Show only the external-temperature fields relevant to diagnosis."""
+        if self.entity_description.key != "remote_temperature_probe":
+            return {}
+        status: ACStatus | None = self.coordinator.data
+        if status is None:
+            return {}
+        return {
+            "remote_temperature_value": status.remote_temperature_value,
+            "remote_temperature_unit": status.remote_temperature_unit,
+            "remote_temperature_error": status.remote_temperature_error,
+        }
