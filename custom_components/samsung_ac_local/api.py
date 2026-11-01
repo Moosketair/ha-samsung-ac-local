@@ -86,6 +86,12 @@ class ACStatus:
     filter_status: str | None = None
     energy_wh: int | None = None
     instantaneous_power_w: float | None = None
+    # Read-only diagnostic for a possible external temperature feed. Does
+    # not inject a reading or alter the AC's internal thermostat.
+    remote_temperature_probe: str | None = None
+    remote_temperature_value: str | None = None
+    remote_temperature_unit: str | None = None
+    remote_temperature_error: str | None = None
     supported_modes: list[HvacMode] = field(default_factory=list)
     supported_swing: list[SwingMode] = field(default_factory=list)
     supported_convenient: list[ConvenientMode] = field(default_factory=list)
@@ -183,6 +189,11 @@ class SamsungACClient:
         # Some Samsung firmwares reject the standard OCF desired-temperature
         # endpoint (4.04) but accept the vendor temperatures collection.
         self._temperature_write_resource = Resource.TEMPERATURE_DESIRED
+        # Probe once per client lifetime to avoid unnecessary polling of an
+        # unsupported diagnostic resource every 30 seconds.
+        self._remote_temperature_probe_cache: tuple[
+            str, str | None, str | None, str | None
+        ] | None = None
 
     @property
     def host(self) -> str:
@@ -234,6 +245,7 @@ class SamsungACClient:
         self._poll_auto_clean(status)
         self._poll_filter(status)
         self._poll_energy(status)
+        self._poll_remote_temperature(status)
         self._poll_rssi(status)
         self._poll_alarms(status)
         self._poll_ai_sleep(status)
@@ -972,6 +984,49 @@ class SamsungACClient:
                 if isinstance(power_unit, str) and power_unit.upper() == "KW":
                     raw_power *= 1000
                 status.instantaneous_power_w = raw_power
+
+    def _poll_remote_temperature(self, status: ACStatus) -> None:
+        """Probe Samsung's external-temperature resource without writing to it.
+
+        This is a diagnostic only. A readable endpoint does not establish that
+        the firmware supports third-party temperature injection or that the
+        returned temperature affects heating regulation.
+        """
+        if self._remote_temperature_probe_cache is None:
+            try:
+                with self._lock:
+                    code, data = self._request_locked(
+                        COAP_GET, Resource.REMOTE_TEMPERATURE.value
+                    )
+            except (SamsungACConnectionError, SamsungACRequestError) as err:
+                LOGGER.debug("Read-only remote temperature probe failed: %s", err)
+                status.remote_temperature_probe = "connection_error"
+                return
+
+            if code == "4.04":
+                cache = ("not_supported", None, None, None)
+            elif code and code.startswith("2.") and isinstance(data, dict):
+                raw_temp = _samsung_val(data, "temperature")
+                raw_unit = _samsung_val(data, "unit")
+                raw_error = _samsung_val(data, "error")
+                cache = (
+                    "present_with_value" if raw_temp not in (None, "") else "present_empty",
+                    str(raw_temp) if raw_temp is not None else None,
+                    str(raw_unit) if raw_unit is not None else None,
+                    str(raw_error) if raw_error is not None else None,
+                )
+            else:
+                LOGGER.debug("Remote temperature probe got unexpected code %s", code)
+                status.remote_temperature_probe = "unexpected_response"
+                return
+            self._remote_temperature_probe_cache = cache
+
+        (
+            status.remote_temperature_probe,
+            status.remote_temperature_value,
+            status.remote_temperature_unit,
+            status.remote_temperature_error,
+        ) = self._remote_temperature_probe_cache
 
     def _poll_air_purify(self, status: ACStatus) -> None:
         data = self._get(Resource.AIR_PURIFY)
