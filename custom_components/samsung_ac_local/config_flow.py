@@ -136,7 +136,7 @@ class SamsungACOptionsFlow(OptionsFlow):
             else vol.Optional(CONF_POWER_SENSOR)
         )
         fields[power_key] = selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="sensor", device_class="power")
+            selector.EntitySelectorConfig(domain="sensor")
         )
         fields[
             vol.Optional(
