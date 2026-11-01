@@ -182,9 +182,14 @@ class SamsungACClimateEntity(CoordinatorEntity[SamsungACCoordinator], ClimateEnt
             self._attr_hvac_mode = _HVAC_MODE_MAP.get(status.hvac_mode)
 
         # Temperature
-        self._attr_current_temperature = status.current_temperature
-        self._attr_target_temperature = status.target_temperature
-        self._attr_current_humidity = status.humidity
+        # Keep the last confirmed measurements through an intermittent
+        # CoAP read failure. A None means "not received", not "cleared".
+        if status.current_temperature is not None:
+            self._attr_current_temperature = status.current_temperature
+        if status.target_temperature is not None:
+            self._attr_target_temperature = status.target_temperature
+        if status.humidity is not None:
+            self._attr_current_humidity = status.humidity
 
         if status.temperature_min is not None:
             self._attr_min_temp = status.temperature_min
