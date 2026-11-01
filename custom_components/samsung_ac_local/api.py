@@ -179,6 +179,9 @@ class SamsungACClient:
         self._sock: socket.socket | None = None
         self._mid: int = 0
         self._lock = threading.Lock()
+        # Some Samsung firmwares reject the standard OCF desired-temperature
+        # endpoint (4.04) but accept the vendor temperatures collection.
+        self._temperature_write_resource = Resource.TEMPERATURE_DESIRED
 
     @property
     def host(self) -> str:
@@ -322,7 +325,35 @@ class SamsungACClient:
             True if the AC accepted the command.
 
         """
-        return self._post(Resource.TEMPERATURE_DESIRED, {"temperature": temp})
+        vendor_payload = {
+            f"{SAMSUNG_PREFIX}items": [
+                {
+                    f"{SAMSUNG_PREFIX}id": "0",
+                    f"{SAMSUNG_PREFIX}desired": f"{temp:g}",
+                }
+            ]
+        }
+
+        if self._temperature_write_resource == Resource.TEMPERATURES:
+            return self._post(Resource.TEMPERATURES, vendor_payload)
+
+        success, code = self._post_with_code(
+            Resource.TEMPERATURE_DESIRED, {"temperature": temp}
+        )
+        if success or code != "4.04":
+            return success
+
+        # A 4.04 means the OCF resource is not available on this firmware.
+        # Do not retry other failures: an ambiguous POST may have succeeded.
+        LOGGER.info(
+            "Desired-temperature resource unavailable (4.04); "
+            "trying Samsung vendor temperatures resource"
+        )
+        success = self._post(Resource.TEMPERATURES, vendor_payload)
+        if success:
+            self._temperature_write_resource = Resource.TEMPERATURES
+            LOGGER.info("Using Samsung vendor temperature control for %s", self._host)
+        return success
 
     def set_fan_mode(self, mode: FanMode) -> bool:
         """
@@ -781,24 +812,35 @@ class SamsungACClient:
 
     def _post(self, resource: Resource, payload: dict) -> bool:
         """POST to a resource, returning True if the AC accepted the command."""
+        success, _code = self._post_with_code(resource, payload)
+        return success
+
+    def _post_with_code(
+        self, resource: Resource, payload: dict
+    ) -> tuple[bool, str | None]:
+        """POST once and return success and response code for safe fallbacks.
+
+        A missing response is never treated as permission to retry a POST.
+        """
         with self._lock:
             try:
                 code, data = self._request_locked(COAP_POST, resource.value, payload)
             except (SamsungACConnectionError, SamsungACRequestError) as err:
                 LOGGER.error("POST %s failed: %s", resource.value, err)
-                return False
+                return False, None
 
         if code != "2.04":
             LOGGER.warning("POST %s returned code %s", resource.value, code)
-            return False
+            return False, code
 
         response = data.get("controlResponse") if isinstance(data, dict) else None
         if not response:
             LOGGER.warning("POST %s: no controlResponse in reply", resource.value)
-            return False
+            return False, code
 
         return (
-            response.get("result") is True or response.get("errorCode") == "unchanged"
+            response.get("result") is True or response.get("errorCode") == "unchanged",
+            code,
         )
 
     # --- Status polling helpers (private) ---
