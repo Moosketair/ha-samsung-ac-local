@@ -303,8 +303,8 @@ class SamsungACPowerMonitor:
                 self._notify()
             return
 
-        # No sample can originate from our own sensor: configured source is
-        # a separate Home Assistant sensor selected in options.
+        # This observer is read-only; it never sends an appliance command.
+        was_valid = self._data_valid
         self._data_valid = True
         self._last_reported_at = reported_at
         before = self.model.sample_counts
@@ -312,7 +312,12 @@ class SamsungACPowerMonitor:
         changed = self.model.observe(
             watts, self._mode(self.coordinator.data), now, reported_at=reported_at
         )
-        if changed or previous_watts != watts or before != self.model.sample_counts:
+        if (
+            changed
+            or not was_valid
+            or previous_watts != watts
+            or before != self.model.sample_counts
+        ):
             self._notify()
         if before != self.model.sample_counts and now >= self._next_save:
             self._next_save = now + 300
