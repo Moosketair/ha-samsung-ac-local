@@ -684,61 +684,77 @@ class SamsungACClient:
         path: str,
         payload: dict | None = None,
     ) -> tuple[str | None, dict | None]:
-        """
-        Send a CoAP request and wait for the response.
+        """Send a CoAP request, recovering from an unresponsive DTLS session.
 
-        Reconnects once on failure before raising.
+        A GET may be retried once on a fresh DTLS connection. Never
+        automatically repeat a POST: a lost reply does not prove the command
+        failed, and repeating a command can change the device state twice.
         """
-        for attempt in range(2):
+        attempts = 2 if method == COAP_GET else 1
+        for attempt in range(attempts):
             try:
                 self._ensure_connected()
                 msg = self._build_message(method, path, payload)
                 self._active_conn.send(msg)
                 return self._receive_response()
-            except SamsungACRequestError:
-                raise
-            except SamsungACConnectionError:
-                raise
-            except Exception as err:
-                if attempt == 0:
-                    LOGGER.debug("Request to %s failed, reconnecting: %s", path, err)
-                    self._disconnect_locked()
-                    continue
+            except (SamsungACRequestError, SamsungACConnectionError) as err:
+                LOGGER.debug("CoAP request to %s failed: %s", path, err)
+                self._disconnect_locked()
+                if attempt + 1 >= attempts:
+                    raise
+            except (SSL.Error, OSError, TimeoutError) as err:
+                LOGGER.debug("CoAP transport error on %s: %s", path, err)
+                self._disconnect_locked()
+                if attempt + 1 >= attempts:
+                    msg = f"CoAP request to {path} failed: {err}"
+                    raise SamsungACRequestError(msg) from err
 
-                msg_str = f"Request to {path} failed after reconnect: {err}"
-                raise SamsungACRequestError(msg_str) from err
+            LOGGER.debug("Retrying GET %s on a fresh DTLS session", path)
 
-        # Unreachable but satisfies type checkers
-        return None, None
+        msg = f"CoAP request to {path} exhausted retries"
+        raise SamsungACRequestError(msg)
 
     def _receive_response(self) -> tuple[str, dict | None]:
-        """Wait for a CoAP response within the retry/timeout budget."""
-        expected_token = self._mid & 0xFF
-        # CoAP header is 4 bytes + 1 byte token (TKL=1)
-        token_offset = 4
-        min_response_len = token_offset + 1
+        """Wait for the matching CoAP token, ignoring late unrelated replies.
 
-        for _ in range(self._max_retries):
-            ready, _, _ = select.select([self._active_sock], [], [], self._recv_timeout)
+        One monotonic deadline bounds the *total* wait time. Receiving stale
+        packets no longer exhausts the response budget after two packets.
+        """
+        expected_token = self._mid & 0xFF
+        deadline = time.monotonic() + self._recv_timeout
+        discarded = 0
+
+        while (remaining := deadline - time.monotonic()) > 0:
+            ready, _, _ = select.select([self._active_sock], [], [], remaining)
             if not ready:
+                break
+
+            try:
+                data = self._active_conn.recv(4096)
+            except SSL.WantReadError:
                 continue
 
-            data = self._active_conn.recv(4096)
+            # CoAP v1 responses must contain the one-byte request token.
+            if len(data) < 5 or (data[0] >> 6) != 1 or (data[0] & 0x0F) != 1:
+                discarded += 1
+                LOGGER.debug("Discarding short or invalid CoAP response")
+                continue
 
-            # Validate token matches our request
-            if len(data) < min_response_len or data[token_offset] != expected_token:
+            if data[4] != expected_token:
+                discarded += 1
                 LOGGER.debug(
-                    "Discarding mismatched response (expected token %02x, got %s)",
+                    "Discarding mismatched response (expected token %02x, got %02x)",
                     expected_token,
-                    data[token_offset : token_offset + 1].hex()
-                    if len(data) > token_offset
-                    else "short",
+                    data[4],
                 )
                 continue
 
             return self._parse_response(data)
 
-        msg = f"No response after {self._max_retries} attempts"
+        msg = (
+            f"No response after {self._recv_timeout:.1f}s "
+            f"(discarded {discarded} stale/unrelated CoAP packets)"
+        )
         raise SamsungACRequestError(msg)
 
     # --- Convenience wrappers (private) ---
