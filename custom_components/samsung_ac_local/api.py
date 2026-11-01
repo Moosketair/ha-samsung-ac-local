@@ -1010,7 +1010,11 @@ class SamsungACClient:
                 raw_unit = _samsung_val(data, "unit")
                 raw_error = _samsung_val(data, "error")
                 cache = (
-                    "present_with_value" if raw_temp not in (None, "") else "present_empty",
+                    (
+                        "present_with_value"
+                        if raw_temp not in (None, "")
+                        else "present_empty"
+                    ),
                     str(raw_temp) if raw_temp is not None else None,
                     str(raw_unit) if raw_unit is not None else None,
                     str(raw_error) if raw_error is not None else None,
