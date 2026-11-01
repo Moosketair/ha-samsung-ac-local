@@ -15,6 +15,7 @@ Local control of Samsung OCF air conditioners via DTLS/CoAP - no cloud, no Smart
 - Full climate entity (HVAC modes, temperature, fan, swing, presets)
 - WindFree, Sleep, Quiet, Smart, Speed, DryComfort preset modes
 - Sensors: outdoor temperature, energy consumption, filter usage, WiFi RSSI
+- Optional external whole-AC power sensor (indoor + outdoor) with persistent local learning and conservative activity estimation
 - Switches: display light, beep, air purify, auto-clean
 - Binary sensors: cloud connection status, auto-clean activity, freeze wash activity
 - Buttons: start/stop auto-clean cycle, start/stop freeze wash
@@ -49,6 +50,18 @@ That's it. No certificate generation or file management needed.
 ### Options
 
 - **Polling interval** (default 30s): configurable via integration options after setup
+- **External whole-AC power sensor** (optional): pick an existing Home Assistant power sensor in W/kW, including both indoor and outdoor units. This is read-only; the integration will never modify the sensor or the AC based on power.
+- **Publish estimated HVAC action** (optional, default **off**): only publish `heating` or `cooling` when the learning model has adequate evidence; otherwise return no `hvac_action`, allowing a supervising thermostat to use its existing behavior. This is an *estimate*, not a compressor signal.
+
+### Adaptive external-power activity monitor
+
+After selecting a power sensor in **Samsung AC Local > Configure**, two entities appear:
+- **External electrical power**: a mirror of the selected total power measurement.
+- **Estimated activity**: `learning`, `heating_probable`, `cooling_probable`, `idle_probable`, `uncertain`, `fan`, `off`, or `unknown`.
+
+The activity entity exposes the inferred baseline, activation threshold, number of samples and confidence. The model learns from readings during known Samsung modes (especially OFF/FAN), ignores the first two minutes after mode changes and saves its reference samples in Home Assistant storage. It needs fresh reports over time; if the sensor is unavailable/stale, no HVAC action is published. It starts with no learned reference.
+
+**Limitations:** total indoor+outdoor power does not prove compressor status, low inverter output may look like indoor fan consumption, and defrost can mimic heating load. It cannot reliably detect defrost or guarantee an accurate `idle` state. Therefore, `idle_probable` is **not** published as `HVACAction.IDLE`, and the optional `hvac_action` setting should be enabled only after observing sensible estimates for your specific system. When disabled, the climate entity's HVAC action behavior remains unchanged.
 
 ## How it works
 
