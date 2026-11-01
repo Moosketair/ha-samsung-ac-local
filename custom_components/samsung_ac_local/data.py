@@ -31,3 +31,4 @@ class SamsungACData:
     coordinator: SamsungACCoordinator
     device_info: DeviceInfo
     power_monitor: SamsungACPowerMonitor | None = None
+    publish_power_hvac_action: bool = False
