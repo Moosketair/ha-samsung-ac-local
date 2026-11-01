@@ -59,10 +59,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: SamsungACConfigEntry) ->
 
     power_monitor = None
     if power_sensor := entry.options.get(CONF_POWER_SENSOR):
-        power_monitor = SamsungACPowerMonitor(
-            hass, coordinator, power_sensor, entry.entry_id
-        )
-        await power_monitor.async_start()
+        try:
+            power_monitor = SamsungACPowerMonitor(
+                hass, coordinator, power_sensor, entry.entry_id
+            )
+            await power_monitor.async_start()
+        except Exception:  # Optional diagnostics must never break AC control.
+            LOGGER.exception("Unable to start optional external power monitor")
+            power_monitor = None
 
     entry.runtime_data = SamsungACData(
         client=client,
@@ -82,9 +86,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: SamsungACConfigEntry) -
     """Unload a config entry and disconnect from the AC."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        if entry.runtime_data.power_monitor is not None:
-            await entry.runtime_data.power_monitor.async_stop()
-        await hass.async_add_executor_job(entry.runtime_data.client.disconnect)
+        try:
+            if entry.runtime_data.power_monitor is not None:
+                await entry.runtime_data.power_monitor.async_stop()
+        except Exception:
+            LOGGER.exception("Unable to persist optional external power monitor")
+        finally:
+            await hass.async_add_executor_job(entry.runtime_data.client.disconnect)
 
     return unloaded
 
