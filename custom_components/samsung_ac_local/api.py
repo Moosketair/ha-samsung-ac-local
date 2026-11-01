@@ -9,7 +9,6 @@ since the underlying UDP/DTLS I/O is synchronous.
 """
 
 import contextlib
-import math
 import select
 import socket
 import struct
@@ -86,17 +85,6 @@ class ACStatus:
     filter_capacity_hours: int | None = None
     filter_status: str | None = None
     energy_wh: int | None = None
-    instantaneous_power_w: float | None = None
-    instantaneous_power_source: str | None = None
-    # Read-only diagnostic for a possible external temperature feed. Does
-    # not inject a reading or alter the AC's internal thermostat.
-    remote_temperature_probe: str | None = None
-    remote_temperature_value: str | None = None
-    remote_temperature_unit: str | None = None
-    remote_temperature_error: str | None = None
-    remote_temperature_metadata_status: str | None = None
-    remote_temperature_interfaces: str | None = None
-    remote_temperature_types: str | None = None
     supported_modes: list[HvacMode] = field(default_factory=list)
     supported_swing: list[SwingMode] = field(default_factory=list)
     supported_convenient: list[ConvenientMode] = field(default_factory=list)
@@ -194,14 +182,6 @@ class SamsungACClient:
         # Some Samsung firmwares reject the standard OCF desired-temperature
         # endpoint (4.04) but accept the vendor temperatures collection.
         self._temperature_write_resource = Resource.TEMPERATURE_DESIRED
-        # Probe once per client lifetime to avoid unnecessary polling of an
-        # unsupported diagnostic resource every 30 seconds.
-        self._remote_temperature_probe_cache: tuple[
-            str, str | None, str | None, str | None
-        ] | None = None
-        self._remote_temperature_metadata_cache: tuple[
-            str, str | None, str | None
-        ] | None = None
 
     @property
     def host(self) -> str:
@@ -253,7 +233,6 @@ class SamsungACClient:
         self._poll_auto_clean(status)
         self._poll_filter(status)
         self._poll_energy(status)
-        self._poll_remote_temperature(status)
         self._poll_rssi(status)
         self._poll_alarms(status)
         self._poll_ai_sleep(status)
@@ -643,15 +622,8 @@ class SamsungACClient:
         method: int,
         path: str,
         payload: dict | None = None,
-        *,
-        query: str | None = None,
     ) -> bytes:
-        """Build a CoAP message with optional standard URI-Query (option 15).
-
-        The query is used exclusively for read-only OCF baseline discovery.
-        """
-        if query is not None and payload is not None:
-            raise ValueError("Query discovery must not include a POST payload")
+        """Build a CoAP confirmable message with URI-Path options."""
         self._mid = (self._mid + 1) & 0xFFFF
         token = bytes([self._mid & 0xFF])
         # Ver=1, Type=CON, TKL=1
@@ -668,22 +640,6 @@ class SamsungACClient:
                 msg += bytes([(delta << 4) | 13, seg_len - 13])
 
             msg += segment.encode()
-
-        if query is not None:
-            # CoAP URI-Query uses option 15, following URI-Path (option 11).
-            # Length 13+ requires the one-byte extended-length encoding.
-            encoded_query = query.encode()
-            query_len = len(encoded_query)
-            if query_len < COAP_OPTION_EXT_THRESHOLD:
-                msg += bytes([((15 - prev_option) << 4) | query_len])
-            elif query_len < 269:
-                msg += bytes(
-                    [((15 - prev_option) << 4) | 13, query_len - 13]
-                )
-            else:
-                raise ValueError("OCF discovery query too long")
-            msg += encoded_query
-            prev_option = 15
 
         if payload is not None:
             delta = 12 - prev_option
@@ -758,8 +714,6 @@ class SamsungACClient:
         method: int,
         path: str,
         payload: dict | None = None,
-        *,
-        query: str | None = None,
     ) -> tuple[str | None, dict | None]:
         """Send a CoAP request, recovering from an unresponsive DTLS session.
 
@@ -771,7 +725,7 @@ class SamsungACClient:
         for attempt in range(attempts):
             try:
                 self._ensure_connected()
-                msg = self._build_message(method, path, payload, query=query)
+                msg = self._build_message(method, path, payload)
                 self._active_conn.send(msg)
                 return self._receive_response()
             except (SamsungACRequestError, SamsungACConnectionError) as err:
@@ -1004,141 +958,9 @@ class SamsungACClient:
             status.filter_status = _samsung_val(data, "filterStatus")
 
     def _poll_energy(self, status: ACStatus) -> None:
-        """Read energy and try both documented OCF power views.
-
-        The vendor endpoint is preferred. A missing/invalid instantaneous
-        reading triggers one read-only GET of the standard OCF endpoint.
-        Neither source establishes whether the compressor is actually on.
-        """
         data = self._get(Resource.ENERGY)
         if data:
             status.energy_wh = _to_int(_samsung_val(data, "cumulativePower"))
-
-            raw_power = _to_float(_samsung_val(data, "instantaneousPower"))
-            power_unit = _samsung_val(data, "instantaneousPowerUnit")
-            if (
-                raw_power is not None
-                and math.isfinite(raw_power)
-                and raw_power >= 0
-                and raw_power != 65278  # 0xFEFE: no-reading sentinel
-                and raw_power != 65535
-            ):
-                if isinstance(power_unit, str) and power_unit.upper() == "KW":
-                    raw_power *= 1000
-                status.instantaneous_power_w = raw_power
-                status.instantaneous_power_source = "samsung_vendor"
-
-        if status.instantaneous_power_w is None:
-            standard_data = self._get(Resource.ENERGY_STANDARD)
-            if standard_data:
-                # OCF's 'power' field is in watts on known Samsung RAC dumps.
-                standard_power = _to_float(standard_data.get("power"))
-                if (
-                    standard_power is not None
-                    and math.isfinite(standard_power)
-                    and standard_power >= 0
-                    and standard_power not in (65278, 65535)
-                ):
-                    status.instantaneous_power_w = standard_power
-                    status.instantaneous_power_source = "ocf_standard"
-
-    def _poll_remote_temperature(self, status: ACStatus) -> None:
-        """Probe Samsung's external-temperature resource without writing to it.
-
-        This is a diagnostic only. A readable endpoint does not establish that
-        the firmware supports third-party temperature injection or that the
-        returned temperature affects heating regulation.
-        """
-        if self._remote_temperature_probe_cache is None:
-            try:
-                with self._lock:
-                    code, data = self._request_locked(
-                        COAP_GET, Resource.REMOTE_TEMPERATURE.value
-                    )
-            except (SamsungACConnectionError, SamsungACRequestError) as err:
-                LOGGER.debug("Read-only remote temperature probe failed: %s", err)
-                status.remote_temperature_probe = "connection_error"
-                return
-
-            if code == "4.04":
-                cache = ("not_supported", None, None, None)
-            elif code and code.startswith("2.") and isinstance(data, dict):
-                raw_temp = _samsung_val(data, "temperature")
-                raw_unit = _samsung_val(data, "unit")
-                raw_error = _samsung_val(data, "error")
-                cache = (
-                    (
-                        "present_with_value"
-                        if raw_temp not in (None, "")
-                        else "present_empty"
-                    ),
-                    str(raw_temp) if raw_temp is not None else None,
-                    str(raw_unit) if raw_unit is not None else None,
-                    str(raw_error) if raw_error is not None else None,
-                )
-            else:
-                LOGGER.debug("Remote temperature probe got unexpected code %s", code)
-                status.remote_temperature_probe = "unexpected_response"
-                return
-            self._remote_temperature_probe_cache = cache
-
-        (
-            status.remote_temperature_probe,
-            status.remote_temperature_value,
-            status.remote_temperature_unit,
-            status.remote_temperature_error,
-        ) = self._remote_temperature_probe_cache
-
-        if status.remote_temperature_probe not in (
-            "present_empty",
-            "present_with_value",
-        ):
-            return
-
-        # A separate, read-only OCF baseline GET may advertise resource
-        # interfaces (e.g. oic.if.r or oic.if.a). It does not prove writable
-        # semantics or enable third-party temperature injection.
-        if self._remote_temperature_metadata_cache is None:
-            try:
-                with self._lock:
-                    code, data = self._request_locked(
-                        COAP_GET,
-                        Resource.REMOTE_TEMPERATURE.value,
-                        query="if=oic.if.baseline",
-                    )
-            except (SamsungACConnectionError, SamsungACRequestError) as err:
-                LOGGER.debug("Remote temperature baseline GET failed: %s", err)
-                status.remote_temperature_metadata_status = "connection_error"
-                return
-
-            if code and code.startswith("2.") and isinstance(data, dict):
-                interfaces = data.get("if")
-                types = data.get("rt")
-                if not isinstance(interfaces, list):
-                    interfaces = None
-                if not isinstance(types, list):
-                    types = None
-                self._remote_temperature_metadata_cache = (
-                    "advertised" if interfaces or types else "no_metadata",
-                    ", ".join(str(x) for x in interfaces) if interfaces else None,
-                    ", ".join(str(x) for x in types) if types else None,
-                )
-            elif code == "4.04":
-                self._remote_temperature_metadata_cache = (
-                    "baseline_not_supported",
-                    None,
-                    None,
-                )
-            else:
-                LOGGER.debug("Remote temperature baseline returned code %s", code)
-                status.remote_temperature_metadata_status = "unexpected_response"
-                return
-
-        (
-            status.remote_temperature_metadata_status,
-            status.remote_temperature_interfaces,
-            status.remote_temperature_types,
-        ) = self._remote_temperature_metadata_cache
 
     def _poll_air_purify(self, status: ACStatus) -> None:
         data = self._get(Resource.AIR_PURIFY)
