@@ -72,6 +72,12 @@
       },
       "ai_sleep_elapsed": {
         "name": "AI sleep elapsed"
+      },
+      "external_power": {
+        "name": "External electrical power"
+      },
+      "estimated_activity": {
+        "name": "Estimated activity"
       }
     },
     "switch": {
