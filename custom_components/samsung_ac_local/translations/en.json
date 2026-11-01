@@ -21,7 +21,13 @@
       "init": {
         "title": "Samsung AC Local Options",
         "data": {
-          "poll_interval": "Polling interval (seconds)"
+          "poll_interval": "Polling interval (seconds)",
+          "power_sensor": "External whole-AC power sensor (W, optional)",
+          "publish_power_hvac_action": "Publish high-confidence heating/cooling estimate as hvac_action (experimental)"
+        },
+        "data_description": {
+          "power_sensor": "Optional Home Assistant power entity measuring indoor and outdoor units together. Learning runs locally; data stays on your HA host.",
+          "publish_power_hvac_action": "Enable only after checking the Estimated activity sensor. Low-confidence readings never force heating/cooling states; the sensor does not control the AC."
         }
       }
     }
