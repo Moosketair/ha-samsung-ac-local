@@ -12,7 +12,12 @@ from homeassistant.exceptions import ConfigEntryNotReady
 
 from .api import SamsungACClient, SamsungACConnectionError
 from .cert import CERT_PEM, KEY_PEM
-from .config_flow import CONF_HOST, CONF_POLL_INTERVAL, CONF_POWER_SENSOR
+from .config_flow import (
+    CONF_HOST,
+    CONF_POLL_INTERVAL,
+    CONF_POWER_SENSOR,
+    CONF_PUBLISH_HVAC_ACTION,
+)
 from .const import LOGGER
 from .coordinator import DEFAULT_POLL_INTERVAL, SamsungACCoordinator
 from .data import SamsungACConfigEntry, SamsungACData
@@ -64,6 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SamsungACConfigEntry) ->
         coordinator=coordinator,
         device_info=device_info,
         power_monitor=power_monitor,
+        publish_power_hvac_action=bool(entry.options.get(CONF_PUBLISH_HVAC_ACTION, False)),
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
