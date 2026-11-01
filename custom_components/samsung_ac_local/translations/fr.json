@@ -1,0 +1,132 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Samsung AC Local",
+        "description": "Pilotage local de votre climatiseur Samsung. L'appareil doit être associé à SmartThings et sur le même réseau que Home Assistant.",
+        "data": {
+          "host": "Adresse IP de la climatisation"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Connexion impossible. Vérifiez l'adresse IP, le réseau local et l'association SmartThings."
+    },
+    "abort": {
+      "already_configured": "Ce climatiseur est déjà configuré."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options Samsung AC Local",
+        "data": {
+          "poll_interval": "Intervalle d'interrogation (secondes)",
+          "power_sensor": "Capteur de puissance de la PAC (W, facultatif)",
+          "publish_power_hvac_action": "Publier l'activité estimée comme hvac_action (expérimental)"
+        },
+        "data_description": {
+          "power_sensor": "Choisissez le capteur Home Assistant mesurant la puissance totale des unités intérieure et extérieure. L'apprentissage reste local.",
+          "publish_power_hvac_action": "À activer après vérification des estimations. Seul un chauffage/refroidissement jugé suffisamment probable est publié ; une consommation ambiguë ne prouve jamais l'arrêt du compresseur."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "outdoor_temperature": {
+        "name": "Température extérieure"
+      },
+      "energy": {
+        "name": "Consommation d'énergie"
+      },
+      "filter_usage": {
+        "name": "Utilisation du filtre"
+      },
+      "rssi": {
+        "name": "Signal Wi-Fi"
+      },
+      "duration_on": {
+        "name": "Durée de fonctionnement"
+      },
+      "auto_clean_progress": {
+        "name": "Progression du nettoyage automatique"
+      },
+      "freeze_wash_progress": {
+        "name": "Progression du nettoyage antigel"
+      },
+      "filter_capacity": {
+        "name": "Durée de vie du filtre"
+      },
+      "filter_status": {
+        "name": "État du filtre"
+      },
+      "sleep_timer": {
+        "name": "Minuterie de veille"
+      },
+      "ai_temperature": {
+        "name": "Température IA"
+      },
+      "operation_count": {
+        "name": "Nombre de mises en marche"
+      },
+      "ai_sleep_elapsed": {
+        "name": "Durée du sommeil IA"
+      },
+      "external_power": {
+        "name": "Puissance électrique externe"
+      },
+      "estimated_activity": {
+        "name": "Activité estimée"
+      }
+    },
+    "switch": {
+      "display_light": {
+        "name": "Voyant d'affichage"
+      },
+      "beep": {
+        "name": "Signal sonore"
+      },
+      "air_purify": {
+        "name": "Purification de l'air"
+      },
+      "auto_clean": {
+        "name": "Nettoyage automatique"
+      }
+    },
+    "button": {
+      "start_auto_clean": {
+        "name": "Démarrer le nettoyage automatique"
+      },
+      "stop_auto_clean": {
+        "name": "Arrêter le nettoyage automatique"
+      },
+      "start_freeze_wash": {
+        "name": "Démarrer le nettoyage antigel"
+      },
+      "stop_freeze_wash": {
+        "name": "Arrêter le nettoyage antigel"
+      }
+    },
+    "binary_sensor": {
+      "cloud_connected": {
+        "name": "Cloud connecté"
+      },
+      "auto_clean_active": {
+        "name": "Nettoyage automatique en cours"
+      },
+      "freeze_wash_active": {
+        "name": "Nettoyage antigel en cours"
+      },
+      "outdoor_connected": {
+        "name": "Unité extérieure connectée"
+      },
+      "ai_sleep_active": {
+        "name": "Sommeil IA actif"
+      },
+      "mute_once": {
+        "name": "Signal sonore temporairement désactivé"
+      }
+    }
+  }
+}
