@@ -304,10 +304,11 @@ class SamsungACPowerMonitor:
         self._data_valid = True
         self._last_reported_at = reported_at
         before = self.model.sample_counts
+        previous_watts = self.model.last_power_w
         changed = self.model.observe(
             watts, self._mode(self.coordinator.data), now, reported_at=reported_at
         )
-        if changed:
+        if changed or previous_watts != watts or before != self.model.sample_counts:
             self._notify()
         if before != self.model.sample_counts and now >= self._next_save:
             self._next_save = now + 300
