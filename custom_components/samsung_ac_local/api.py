@@ -85,6 +85,7 @@ class ACStatus:
     filter_capacity_hours: int | None = None
     filter_status: str | None = None
     energy_wh: int | None = None
+    instantaneous_power_w: float | None = None
     supported_modes: list[HvacMode] = field(default_factory=list)
     supported_swing: list[SwingMode] = field(default_factory=list)
     supported_convenient: list[ConvenientMode] = field(default_factory=list)
@@ -961,6 +962,16 @@ class SamsungACClient:
         data = self._get(Resource.ENERGY)
         if data:
             status.energy_wh = _to_int(_samsung_val(data, "cumulativePower"))
+
+            # Some Samsung OCF firmwares expose instantaneous electric power
+            # on the same resource. Leave it unknown when absent or invalid:
+            # a synthetic 0 W would incorrectly imply an idle compressor.
+            raw_power = _to_float(_samsung_val(data, "instantaneousPower"))
+            power_unit = _samsung_val(data, "instantaneousPowerUnit")
+            if raw_power is not None and raw_power >= 0:
+                if isinstance(power_unit, str) and power_unit.upper() == "KW":
+                    raw_power *= 1000
+                status.instantaneous_power_w = raw_power
 
     def _poll_air_purify(self, status: ACStatus) -> None:
         data = self._get(Resource.AIR_PURIFY)
