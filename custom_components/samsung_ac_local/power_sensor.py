@@ -24,7 +24,8 @@ class SamsungACExternalPowerSensor(SensorEntity):
     """Surface chosen whole-AC electrical power, including both units."""
 
     _attr_has_entity_name = True
-    _attr_name = "External electrical power"
+    _attr_name = None
+    _attr_translation_key = "external_power"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfPower.WATT
@@ -64,7 +65,8 @@ class SamsungACEstimatedActivitySensor(SensorEntity):
     """Conservative estimate from consumption and the Samsung HVAC mode."""
 
     _attr_has_entity_name = True
-    _attr_name = "Estimated activity"
+    _attr_name = None
+    _attr_translation_key = "estimated_activity"
     _attr_icon = "mdi:chart-bell-curve-cumulative"
 
     def __init__(
