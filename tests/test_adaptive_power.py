@@ -10,10 +10,10 @@ from custom_components.samsung_ac_local.climate import SamsungACClimateEntity
 from custom_components.samsung_ac_local.power_monitor import AdaptivePowerModel
 
 
-def _train_off(model: AdaptivePowerModel, count: int = 20) -> float:
+def _train_off(model: AdaptivePowerModel, count: int = 20, start: float = 100) -> float:
     """Use isolated fresh off-meter reports, then return current time."""
-    model.observe(12, "off", 100, reported_at=100)
-    timestamp = 230.0
+    model.observe(12, "off", start, reported_at=start)
+    timestamp = start + 130.0
     for _ in range(count):
         model.observe(12, "off", timestamp, reported_at=timestamp)
         timestamp += 30
@@ -33,7 +33,7 @@ def test_learning_requires_off_reference_and_repeated_heat_readings() -> None:
     assert model.state == "learning"
     assert model.confidence == "none"
 
-    start = _train_off(model)
+    start = _train_off(model, start=500)
     _train_heat(model, start + 100, 850)
     assert model.reference_w == 12
     assert model.activation_threshold_w >= 262
