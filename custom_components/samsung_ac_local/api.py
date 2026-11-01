@@ -881,6 +881,10 @@ class SamsungACClient:
             items = _samsung_val(data, "items")
             if isinstance(items, list) and items:
                 item = items[0]
+                # Some firmwares do not expose /temperature/current/0.
+                # The vendor collection contains the same current reading.
+                if status.current_temperature is None:
+                    status.current_temperature = _to_float(_samsung_val(item, "current"))
                 status.target_temperature = _to_float(_samsung_val(item, "desired"))
 
                 if status.temperature_min is None:
